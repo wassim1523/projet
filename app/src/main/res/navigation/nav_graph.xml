@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/nav_graph"
+    app:startDestination="@id/homeFragment">
+
+    <fragment
+        android:id="@+id/homeFragment"
+        android:name="com.example.myapplication.ui.home.HomeFragment"
+        android:label="Home">
+
+        <action
+            android:id="@+id/action_homeFragment_to_pdfFragment"
+            app:destination="@id/pdfFragment" />
+
+        <action
+            android:id="@+id/action_homeFragment_to_notesFragment"
+            app:destination="@id/notesFragment" />
+
+        <action
+            android:id="@+id/action_homeFragment_to_gpaFragment"
+            app:destination="@id/gpaFragment" />
+    </fragment>
+
+    <fragment
+        android:id="@+id/pdfFragment"
+        android:name="com.example.myapplication.ui.PdfFragment"
+        android:label="PDF" />
+
+    <fragment
+        android:id="@+id/notesFragment"
+        android:name="com.example.myapplication.ui.notes.NotesFragment"
+        android:label="Notes">
+
+        <action
+            android:id="@+id/action_notesFragment_to_addEditNoteFragment"
+            app:destination="@id/addEditNoteFragment" />
+    </fragment>
+
+    <fragment
+        android:id="@+id/addEditNoteFragment"
+        android:name="com.example.myapplication.ui.notes.AddEditNoteFragment"
+        android:label="Add Edit Note">
+
+        <argument
+            android:name="noteId"
+            app:argType="integer"
+            android:defaultValue="-1" />
+    </fragment>
+
+    <fragment
+        android:id="@+id/gpaFragment"
+        android:name="com.example.myapplication.ui.gpa.GpaFragment"
+        android:label="GPA" />
+</navigation>
