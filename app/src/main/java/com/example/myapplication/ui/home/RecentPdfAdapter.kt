@@ -15,29 +15,12 @@ class RecentPdfAdapter(
 ) : RecyclerView.Adapter<RecentPdfAdapter.RecentPdfViewHolder>() {
 
     private val items = mutableListOf<RecentPdfEntity>()
+    private val dateFormat = SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault())
 
     fun submitList(list: List<RecentPdfEntity>) {
         items.clear()
         items.addAll(list)
         notifyDataSetChanged()
-    }
-
-    inner class RecentPdfViewHolder(
-        private val binding: ItemRecentPdfBinding
-    ) : RecyclerView.ViewHolder(binding.root) {
-
-        fun bind(item: RecentPdfEntity) {
-            binding.tvPdfName.text = item.name
-            binding.tvPdfDate.text = formatDate(item.lastOpened)
-
-            binding.root.setOnClickListener {
-                onClick(item)
-            }
-
-            binding.ivDelete.setOnClickListener {
-                onDelete(item)
-            }
-        }
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecentPdfViewHolder {
@@ -55,7 +38,21 @@ class RecentPdfAdapter(
 
     override fun getItemCount(): Int = items.size
 
-    private fun formatDate(time: Long): String {
-        return SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault()).format(Date(time))
+    inner class RecentPdfViewHolder(
+        private val binding: ItemRecentPdfBinding
+    ) : RecyclerView.ViewHolder(binding.root) {
+
+        fun bind(item: RecentPdfEntity) {
+            binding.tvPdfName.text = item.name
+            binding.tvPdfDate.text = dateFormat.format(Date(item.lastOpened))
+
+            binding.root.setOnClickListener {
+                onClick(item)
+            }
+
+            binding.ivDelete.setOnClickListener {
+                onDelete(item)
+            }
+        }
     }
 }

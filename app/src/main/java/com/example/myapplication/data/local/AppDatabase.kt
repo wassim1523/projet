@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import com.example.myapplication.data.local.auth.UserDao
+import com.example.myapplication.data.local.auth.UserEntity
 import com.example.myapplication.data.local.notes.NoteDao
 import com.example.myapplication.data.local.notes.NoteEntity
 import com.example.myapplication.data.local.recentpdf.RecentPdfDao
@@ -12,15 +14,17 @@ import com.example.myapplication.data.local.recentpdf.RecentPdfEntity
 @Database(
     entities = [
         NoteEntity::class,
-        RecentPdfEntity::class
+        RecentPdfEntity::class,
+        UserEntity::class
     ],
-    version = 1,
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun noteDao(): NoteDao
     abstract fun recentPdfDao(): RecentPdfDao
+    abstract fun userDao(): UserDao
 
     companion object {
         @Volatile
@@ -32,7 +36,9 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "my_application_db"
-                ).build()
+                )
+                    .fallbackToDestructiveMigration()
+                    .build()
                 INSTANCE = instance
                 instance
             }

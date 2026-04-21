@@ -199,7 +199,7 @@
                 android:layout_margin="8dp"
                 android:background="#FFFFFF">
 
-                <com.example.myapplication.ui.DrawingView
+                <com.example.myapplication.ui.pdf.DrawingView
                     android:id="@+id/drawingView"
                     android:layout_width="match_parent"
                     android:layout_height="match_parent" />

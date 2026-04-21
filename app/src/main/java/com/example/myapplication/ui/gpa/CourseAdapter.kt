@@ -4,41 +4,55 @@ import android.view.LayoutInflater
 import android.view.ViewGroup
 import androidx.recyclerview.widget.RecyclerView
 import com.example.myapplication.databinding.ItemCourseBinding
-import com.example.myapplication.domain.Course
+import com.example.myapplication.domain.model.Course
+import java.util.Locale
 
 class CourseAdapter(
-    private var list: MutableList<Course>,
-    private val onDelete: (Int) -> Unit
-) : RecyclerView.Adapter<CourseAdapter.Holder>() {
+    private val onDeleteClick: (Course) -> Unit
+) : RecyclerView.Adapter<CourseAdapter.CourseViewHolder>() {
 
-    inner class Holder(val binding: ItemCourseBinding) :
-        RecyclerView.ViewHolder(binding.root)
+    private val items = mutableListOf<Course>()
 
-    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
+    fun submitList(newList: List<Course>) {
+        items.clear()
+        items.addAll(newList)
+        notifyDataSetChanged()
+    }
+
+    inner class CourseViewHolder(private val binding: ItemCourseBinding) :
+        RecyclerView.ViewHolder(binding.root) {
+
+        fun bind(course: Course) {
+            binding.tvCourseName.text = course.name
+            binding.tvCourseGrade.text = String.format(
+                Locale.US,
+                "Note: %.2f / 20",
+                course.gradeOn20
+            )
+            binding.tvCourseCoeff.text = String.format(
+                Locale.US,
+                "Coef: %.2f",
+                course.coefficient
+            )
+
+            binding.btnDeleteCourse.setOnClickListener {
+                onDeleteClick(course)
+            }
+        }
+    }
+
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): CourseViewHolder {
         val binding = ItemCourseBinding.inflate(
             LayoutInflater.from(parent.context),
             parent,
             false
         )
-        return Holder(binding)
+        return CourseViewHolder(binding)
     }
 
-    override fun onBindViewHolder(holder: Holder, position: Int) {
-        val c = list[position]
-
-        holder.binding.tvCourseName.text = c.name
-        holder.binding.tvCourseCredit.text = "${c.credit} credits"
-        holder.binding.tvCourseGrade.text = String.format("%.2f / 4", c.grade)
-
-        holder.binding.btnDeleteCourse.setOnClickListener {
-            onDelete(position)
-        }
+    override fun onBindViewHolder(holder: CourseViewHolder, position: Int) {
+        holder.bind(items[position])
     }
 
-    override fun getItemCount(): Int = list.size
-
-    fun update(newList: MutableList<Course>) {
-        list = newList
-        notifyDataSetChanged()
-    }
+    override fun getItemCount(): Int = items.size
 }

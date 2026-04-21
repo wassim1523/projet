@@ -1,7 +1,8 @@
-package com.example.myapplication.domain
+package com.example.myapplication.domain.model
 
 data class Course(
+    val id: Long = System.currentTimeMillis(),
     val name: String,
-    val credit: Int,
-    val grade: Double
+    val gradeOn20: Double,
+    val coefficient: Double
 )

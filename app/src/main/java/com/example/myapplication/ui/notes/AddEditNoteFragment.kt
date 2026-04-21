@@ -13,7 +13,6 @@ import androidx.fragment.app.Fragment
 import androidx.lifecycle.ViewModelProvider
 import androidx.navigation.fragment.findNavController
 import com.example.myapplication.data.local.AppDatabase
-import com.example.myapplication.data.repository.NoteRepository
 import com.example.myapplication.databinding.FragmentAddEditNoteBinding
 import org.json.JSONObject
 import org.vosk.Model
@@ -27,7 +26,7 @@ class AddEditNoteFragment : Fragment(), RecognitionListener {
     private var _binding: FragmentAddEditNoteBinding? = null
     private val binding get() = _binding!!
 
-    private lateinit var noteViewModel: NoteViewModel
+    private lateinit var noteViewModel: NotesViewModel
     private lateinit var speechViewModel: SpeechViewModel
 
     private var noteId: Int = -1
@@ -58,10 +57,8 @@ class AddEditNoteFragment : Fragment(), RecognitionListener {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
-        val dao = AppDatabase.getInstance(requireContext()).noteDao()
-        val repository = NoteRepository(dao)
-        val factory = NoteViewModelFactory(repository)
-        noteViewModel = ViewModelProvider(this, factory)[NoteViewModel::class.java]
+        val factory = NotesViewModelFactory(requireActivity().application)
+        noteViewModel = ViewModelProvider(this, factory)[NotesViewModel::class.java]
         speechViewModel = ViewModelProvider(this)[SpeechViewModel::class.java]
 
         noteId = arguments?.getInt("noteId", -1) ?: -1

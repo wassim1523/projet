@@ -1,4 +1,4 @@
-package com.example.myapplication.ui
+package com.example.myapplication.ui.pdf
 
 import android.content.ContentValues
 import android.content.Intent
@@ -18,6 +18,8 @@ import android.os.Environment
 import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
 import android.provider.OpenableColumns
+import android.text.Editable
+import android.text.TextWatcher
 import android.util.Base64
 import android.util.TypedValue
 import android.view.Gravity
@@ -29,43 +31,44 @@ import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.SeekBar
 import android.widget.Toast
 import androidx.core.view.doOnLayout
 import androidx.fragment.app.Fragment
+import androidx.fragment.app.activityViewModels
 import androidx.lifecycle.ViewModelProvider
 import com.example.myapplication.data.local.AppDatabase
 import com.example.myapplication.data.repository.RecentPdfRepository
 import com.example.myapplication.databinding.FragmentPdfBinding
+import com.example.myapplication.ui.pdf.PdfViewModel
 import com.example.myapplication.ui.home.RecentPdfViewModel
 import com.example.myapplication.ui.home.RecentPdfViewModelFactory
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import kotlin.math.abs
 
 class PdfFragment : Fragment() {
 
     private var _binding: FragmentPdfBinding? = null
     private val binding get() = _binding!!
 
-    private var pdfUriString: String? = null
+    private val pdfViewModel: PdfViewModel by activityViewModels()
+
     private var fileDescriptor: ParcelFileDescriptor? = null
     private var pdfRenderer: PdfRenderer? = null
     private var currentPage: PdfRenderer.Page? = null
-    private var currentPageIndex = 0
-
-    private var whiteboardVisible = true
-    private var currentWhitePageIndex = 0
-    private var whitePageCount = 1
 
     private lateinit var recentPdfViewModel: RecentPdfViewModel
     private var recentSaved = false
 
+    private var isRestoringUi = false
+    private var pdfOpened = false
+
     private val prefs by lazy {
         requireContext().getSharedPreferences("pdf_edits", 0)
     }
-
-    private var textModeEnabled = false
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -81,7 +84,10 @@ class PdfFragment : Fragment() {
 
         setupRecentPdfViewModel()
 
-        pdfUriString = arguments?.getString("pdfUri")
+        val argPdfUri = arguments?.getString("pdfUri")
+        pdfViewModel.setPdfUri(argPdfUri)
+
+        val pdfUriString = pdfViewModel.pdfUriString.value
         if (pdfUriString.isNullOrEmpty()) {
             Toast.makeText(requireContext(), "PDF path missing", Toast.LENGTH_SHORT).show()
             return
@@ -90,104 +96,120 @@ class PdfFragment : Fragment() {
         val uri = Uri.parse(pdfUriString)
         takeReadPermissionIfPossible(uri)
         savePdfToRecent(uri)
-        openPdf(uri)
+
         setupUi()
+        observeViewModel()
+        openPdf(uri)
     }
 
     private fun setupRecentPdfViewModel() {
-        val dao = AppDatabase.getInstance(requireContext()).recentPdfDao()
+        val dao = AppDatabase.Companion.getInstance(requireContext()).recentPdfDao()
         val repository = RecentPdfRepository(dao)
         val factory = RecentPdfViewModelFactory(repository)
         recentPdfViewModel = ViewModelProvider(this, factory)[RecentPdfViewModel::class.java]
     }
 
+    private fun observeViewModel() {
+        pdfViewModel.whiteboardVisible.observe(viewLifecycleOwner) { visible ->
+            if (_binding == null) return@observe
+            binding.whitePane.visibility = if (visible) View.VISIBLE else View.GONE
+            binding.btnToggleWhiteboard.text = if (visible) "Hide W" else "Show W"
+            updateWhiteUi()
+        }
+
+        pdfViewModel.textModeEnabled.observe(viewLifecycleOwner) { enabled ->
+            if (_binding == null) return@observe
+            binding.drawingView.setDrawingEnabled(!enabled)
+            binding.pdfTapLayer.visibility = if (enabled) View.VISIBLE else View.GONE
+            binding.whiteTapLayer.visibility = if (enabled) View.VISIBLE else View.GONE
+            binding.pdfTapLayer.isClickable = enabled
+            binding.whiteTapLayer.isClickable = enabled
+        }
+
+        pdfViewModel.currentWhitePageIndex.observe(viewLifecycleOwner) {
+            if (_binding == null || !pdfOpened) return@observe
+            isRestoringUi = true
+            restoreWhitePageEdits()
+            updateWhiteUi()
+            isRestoringUi = false
+        }
+
+        pdfViewModel.whitePageCount.observe(viewLifecycleOwner) {
+            if (_binding == null) return@observe
+            updateWhiteUi()
+        }
+    }
+
     private fun setupUi() {
-        fun enableTextMode() {
-            textModeEnabled = true
-            binding.drawingView.setDrawingEnabled(false)
-
-            binding.pdfTapLayer.visibility = View.VISIBLE
-            binding.whiteTapLayer.visibility = View.VISIBLE
-
-            binding.pdfTapLayer.isClickable = true
-            binding.whiteTapLayer.isClickable = true
-        }
-
-        fun disableTextMode() {
-            textModeEnabled = false
-
-            binding.pdfTapLayer.visibility = View.GONE
-            binding.whiteTapLayer.visibility = View.GONE
-
-            binding.pdfTapLayer.isClickable = false
-            binding.whiteTapLayer.isClickable = false
-        }
-
         binding.btnPrevious.setOnClickListener {
+            val currentPageIndex = pdfViewModel.currentPageIndex.value ?: 0
             if (currentPageIndex > 0) {
-                saveCurrentPdfPageEdits()
-                saveCurrentWhitePageEdits()
+                safeSaveAll()
                 showPage(currentPageIndex - 1)
             }
         }
 
         binding.btnNext.setOnClickListener {
             val renderer = pdfRenderer ?: return@setOnClickListener
+            val currentPageIndex = pdfViewModel.currentPageIndex.value ?: 0
             if (currentPageIndex < renderer.pageCount - 1) {
-                saveCurrentPdfPageEdits()
-                saveCurrentWhitePageEdits()
+                safeSaveAll()
                 showPage(currentPageIndex + 1)
             }
         }
 
         binding.btnPrevWhite.setOnClickListener {
+            val currentWhitePageIndex = pdfViewModel.currentWhitePageIndex.value ?: 0
             if (currentWhitePageIndex > 0) {
-                saveCurrentWhitePageEdits()
-                currentWhitePageIndex--
-                restoreWhitePageEdits()
-                updateWhiteUi()
+                safeSaveAll()
+                pdfViewModel.prevWhitePage()
             }
         }
 
         binding.btnNextWhite.setOnClickListener {
+            val currentWhitePageIndex = pdfViewModel.currentWhitePageIndex.value ?: 0
+            val whitePageCount = pdfViewModel.whitePageCount.value ?: 1
             if (currentWhitePageIndex < whitePageCount - 1) {
-                saveCurrentWhitePageEdits()
-                currentWhitePageIndex++
-                restoreWhitePageEdits()
-                updateWhiteUi()
+                safeSaveAll()
+                pdfViewModel.nextWhitePage()
             }
         }
 
         binding.btnAddWhitePage.setOnClickListener {
-            val pdfKey = pdfUriString ?: return@setOnClickListener
-            saveCurrentWhitePageEdits()
-            whitePageCount++
+            val pdfKey = pdfViewModel.pdfUriString.value ?: return@setOnClickListener
+            val currentPageIndex = pdfViewModel.currentPageIndex.value ?: 0
+
+            safeSaveAll()
+            pdfViewModel.addWhitePageAndGoToLast()
+
+            val whitePageCount = pdfViewModel.whitePageCount.value ?: 1
             prefs.edit()
                 .putInt(currentPdfPageWhiteCountKey(pdfKey, currentPageIndex), whitePageCount)
-                .apply()
-            currentWhitePageIndex = whitePageCount - 1
+                .commit()
+
+            isRestoringUi = true
             clearWhitePageViews()
+            restoreWhitePageEdits()
             updateWhiteUi()
+            isRestoringUi = false
         }
 
         binding.btnToggleWhiteboard.setOnClickListener {
-            whiteboardVisible = !whiteboardVisible
-            binding.whitePane.visibility = if (whiteboardVisible) View.VISIBLE else View.GONE
-            updateWhiteUi()
+            pdfViewModel.toggleWhiteboard()
         }
 
         binding.btnSave.setOnClickListener {
-            saveCurrentPdfPageEdits()
-            saveCurrentWhitePageEdits()
+            safeSaveAll()
             exportEditedPdfToDevice()
         }
 
         binding.btnText.setOnClickListener {
-            enableTextMode()
+            pdfViewModel.setTextModeEnabled(true)
             Toast.makeText(requireContext(), "Tap on PDF or white page", Toast.LENGTH_SHORT).show()
         }
 
         binding.pdfTapLayer.setOnTouchListener { _, event ->
+            val textModeEnabled = pdfViewModel.textModeEnabled.value ?: false
             if (textModeEnabled && event.action == MotionEvent.ACTION_UP) {
                 addTextBox(
                     parent = binding.pdfTextOverlay,
@@ -195,8 +217,8 @@ class PdfFragment : Fragment() {
                     x = event.x,
                     y = event.y
                 )
-                saveCurrentPdfPageEdits()
-                disableTextMode()
+                safeSavePdf()
+                pdfViewModel.setTextModeEnabled(false)
                 true
             } else {
                 false
@@ -204,6 +226,7 @@ class PdfFragment : Fragment() {
         }
 
         binding.whiteTapLayer.setOnTouchListener { _, event ->
+            val textModeEnabled = pdfViewModel.textModeEnabled.value ?: false
             if (textModeEnabled && event.action == MotionEvent.ACTION_UP) {
                 addTextBox(
                     parent = binding.whiteTextOverlay,
@@ -211,8 +234,8 @@ class PdfFragment : Fragment() {
                     x = event.x,
                     y = event.y
                 )
-                saveCurrentWhitePageEdits()
-                disableTextMode()
+                safeSaveWhite()
+                pdfViewModel.setTextModeEnabled(false)
                 true
             } else {
                 false
@@ -220,13 +243,13 @@ class PdfFragment : Fragment() {
         }
 
         binding.btnPen.setOnClickListener {
-            disableTextMode()
+            pdfViewModel.setTextModeEnabled(false)
             binding.drawingView.setDrawingEnabled(true)
             binding.drawingView.setEraserMode(false)
         }
 
         binding.btnEraser.setOnClickListener {
-            disableTextMode()
+            pdfViewModel.setTextModeEnabled(false)
             binding.drawingView.setDrawingEnabled(true)
             binding.drawingView.setEraserMode(true)
         }
@@ -236,23 +259,45 @@ class PdfFragment : Fragment() {
         binding.drawingView.setStrokeWidth(12f)
 
         binding.sizeSeekBar.setOnSeekBarChangeListener(object :
-            android.widget.SeekBar.OnSeekBarChangeListener {
+            SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(
-                seekBar: android.widget.SeekBar?,
+                seekBar: SeekBar?,
                 progress: Int,
                 fromUser: Boolean
             ) {
                 binding.drawingView.setStrokeWidth(progress.coerceAtLeast(3).toFloat())
             }
 
-            override fun onStartTrackingTouch(seekBar: android.widget.SeekBar?) {}
-            override fun onStopTrackingTouch(seekBar: android.widget.SeekBar?) {}
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
         })
 
-        disableTextMode()
+        pdfViewModel.setTextModeEnabled(false)
+        updateWhiteUi()
+    }
+
+    private fun safeSaveAll() {
+        safeSavePdf()
+        safeSaveWhite()
+    }
+
+    private fun safeSavePdf() {
+        if (!isRestoringUi && _binding != null && pdfOpened) {
+            saveCurrentPdfPageEdits()
+        }
+    }
+
+    private fun safeSaveWhite() {
+        if (!isRestoringUi && _binding != null && pdfOpened) {
+            saveCurrentWhitePageEdits()
+        }
     }
 
     private fun updateWhiteUi() {
+        val currentWhitePageIndex = pdfViewModel.currentWhitePageIndex.value ?: 0
+        val whitePageCount = pdfViewModel.whitePageCount.value ?: 1
+        val whiteboardVisible = pdfViewModel.whiteboardVisible.value ?: true
+
         binding.tvWhitePageNumber.text = "W ${currentWhitePageIndex + 1} / $whitePageCount"
         binding.btnToggleWhiteboard.text = if (whiteboardVisible) "Hide W" else "Show W"
         binding.whitePane.visibility = if (whiteboardVisible) View.VISIBLE else View.GONE
@@ -273,7 +318,9 @@ class PdfFragment : Fragment() {
             }
 
             pdfRenderer = PdfRenderer(fileDescriptor!!)
-            showPage(0)
+            pdfOpened = true
+            val pageToShow = pdfViewModel.currentPageIndex.value ?: 0
+            showPage(pageToShow)
         } catch (e: Exception) {
             Toast.makeText(requireContext(), "Error opening PDF: ${e.message}", Toast.LENGTH_LONG).show()
         }
@@ -281,12 +328,19 @@ class PdfFragment : Fragment() {
 
     private fun showPage(index: Int) {
         val renderer = pdfRenderer ?: return
+        if (index < 0 || index >= renderer.pageCount) return
+
+        isRestoringUi = true
 
         currentPage?.close()
         currentPage = renderer.openPage(index)
-        currentPageIndex = index
+        pdfViewModel.setCurrentPage(index)
 
-        val page = currentPage ?: return
+        val page = currentPage ?: run {
+            isRestoringUi = false
+            return
+        }
+
         val bitmap = Bitmap.createBitmap(page.width, page.height, Bitmap.Config.ARGB_8888)
         page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
 
@@ -296,15 +350,27 @@ class PdfFragment : Fragment() {
         binding.pdfTextOverlay.removeAllViews()
         restorePdfPageEdits()
 
-        val pdfKey = pdfUriString ?: return
-        whitePageCount = prefs.getInt(
-            currentPdfPageWhiteCountKey(pdfKey, currentPageIndex),
+        val pdfKey = pdfViewModel.pdfUriString.value ?: run {
+            isRestoringUi = false
+            return
+        }
+
+        val whiteCount = prefs.getInt(
+            currentPdfPageWhiteCountKey(pdfKey, index),
             1
         ).coerceAtLeast(1)
-        currentWhitePageIndex = 0
+
+        pdfViewModel.setWhitePageCount(whiteCount)
+
+        val currentWhite = pdfViewModel.currentWhitePageIndex.value ?: 0
+        if (currentWhite >= whiteCount) {
+            pdfViewModel.setCurrentWhitePageIndex(whiteCount - 1)
+        }
 
         restoreWhitePageEdits()
         updateWhiteUi()
+
+        isRestoringUi = false
     }
 
     private fun savePdfToRecent(uri: Uri) {
@@ -379,20 +445,32 @@ class PdfFragment : Fragment() {
             imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI
             isSingleLine = false
 
+            addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+                override fun afterTextChanged(s: Editable?) {
+                    if (parent === binding.pdfTextOverlay) {
+                        safeSavePdf()
+                    } else {
+                        safeSaveWhite()
+                    }
+                }
+            })
+
             setOnFocusChangeListener { _, _ ->
                 if (parent === binding.pdfTextOverlay) {
-                    saveCurrentPdfPageEdits()
+                    safeSavePdf()
                 } else {
-                    saveCurrentWhitePageEdits()
+                    safeSaveWhite()
                 }
             }
 
             setOnLongClickListener {
                 parent.removeView(this)
                 if (parent === binding.pdfTextOverlay) {
-                    saveCurrentPdfPageEdits()
+                    safeSavePdf()
                 } else {
-                    saveCurrentWhitePageEdits()
+                    safeSaveWhite()
                 }
                 true
             }
@@ -444,7 +522,7 @@ class PdfFragment : Fragment() {
                     val dx = event.rawX - downRawX
                     val dy = event.rawY - downRawY
 
-                    if (!dragging && (kotlin.math.abs(dx) > touchSlop || kotlin.math.abs(dy) > touchSlop)) {
+                    if (!dragging && (abs(dx) > touchSlop || abs(dy) > touchSlop)) {
                         dragging = true
                         v.parent.requestDisallowInterceptTouchEvent(true)
                     }
@@ -464,9 +542,9 @@ class PdfFragment : Fragment() {
                     v.parent.requestDisallowInterceptTouchEvent(false)
                     if (dragging) {
                         if (parent === binding.pdfTextOverlay) {
-                            saveCurrentPdfPageEdits()
+                            safeSavePdf()
                         } else {
-                            saveCurrentWhitePageEdits()
+                            safeSaveWhite()
                         }
                         true
                     } else {
@@ -480,17 +558,22 @@ class PdfFragment : Fragment() {
     }
 
     private fun saveCurrentPdfPageEdits() {
-        val pdfKey = pdfUriString ?: return
+        val pdfKey = pdfViewModel.pdfUriString.value ?: return
+        val currentPageIndex = pdfViewModel.currentPageIndex.value ?: 0
         saveTextOverlay(pdfTextKey(pdfKey, currentPageIndex), binding.pdfTextOverlay)
     }
 
     private fun restorePdfPageEdits() {
-        val pdfKey = pdfUriString ?: return
+        val pdfKey = pdfViewModel.pdfUriString.value ?: return
+        val currentPageIndex = pdfViewModel.currentPageIndex.value ?: 0
         restoreTextOverlay(pdfTextKey(pdfKey, currentPageIndex), binding.pdfTextOverlay)
     }
 
     private fun saveCurrentWhitePageEdits() {
-        val pdfKey = pdfUriString ?: return
+        val pdfKey = pdfViewModel.pdfUriString.value ?: return
+        val currentPageIndex = pdfViewModel.currentPageIndex.value ?: 0
+        val currentWhitePageIndex = pdfViewModel.currentWhitePageIndex.value ?: 0
+
         saveTextOverlay(
             whiteTextKey(pdfKey, currentPageIndex, currentWhitePageIndex),
             binding.whiteTextOverlay
@@ -502,8 +585,13 @@ class PdfFragment : Fragment() {
     }
 
     private fun restoreWhitePageEdits() {
+        if (_binding == null) return
+
         clearWhitePageViews()
-        val pdfKey = pdfUriString ?: return
+
+        val pdfKey = pdfViewModel.pdfUriString.value ?: return
+        val currentPageIndex = pdfViewModel.currentPageIndex.value ?: 0
+        val currentWhitePageIndex = pdfViewModel.currentWhitePageIndex.value ?: 0
 
         restoreTextOverlay(
             whiteTextKey(pdfKey, currentPageIndex, currentWhitePageIndex),
@@ -547,7 +635,7 @@ class PdfFragment : Fragment() {
             arr.put(obj)
         }
 
-        prefs.edit().putString(key, arr.toString()).apply()
+        prefs.edit().putString(key, arr.toString()).commit()
     }
 
     private fun restoreTextOverlay(key: String, parent: FrameLayout) {
@@ -609,13 +697,12 @@ class PdfFragment : Fragment() {
 
     private fun exportEditedPdfToDevice() {
         val renderer = pdfRenderer ?: return
-        val pdfKey = pdfUriString ?: return
+        val pdfKey = pdfViewModel.pdfUriString.value ?: return
         val fileName = buildExportFileName()
         val document = PdfDocument()
 
         try {
-            saveCurrentPdfPageEdits()
-            saveCurrentWhitePageEdits()
+            safeSaveAll()
 
             for (i in 0 until renderer.pageCount) {
                 val page = renderer.openPage(i)
@@ -692,6 +779,7 @@ class PdfFragment : Fragment() {
                 Toast.makeText(requireContext(), "Save failed", Toast.LENGTH_LONG).show()
             }
 
+            val currentPageIndex = pdfViewModel.currentPageIndex.value ?: 0
             showPage(currentPageIndex)
         } catch (e: Exception) {
             Toast.makeText(requireContext(), "Save failed: ${e.message}", Toast.LENGTH_LONG).show()
@@ -767,7 +855,8 @@ class PdfFragment : Fragment() {
     }
 
     private fun buildExportFileName(): String {
-        val name = getFileName(Uri.parse(pdfUriString))
+        val uriString = pdfViewModel.pdfUriString.value ?: "document.pdf"
+        val name = getFileName(Uri.parse(uriString))
         val base = if (name.endsWith(".pdf", true)) name.removeSuffix(".pdf") else name
         return "${base}_edited.pdf"
     }
@@ -814,15 +903,16 @@ class PdfFragment : Fragment() {
     }
 
     override fun onPause() {
-        saveCurrentPdfPageEdits()
-        saveCurrentWhitePageEdits()
+        safeSaveAll()
         super.onPause()
     }
 
-    override fun onDestroyView() {
-        saveCurrentPdfPageEdits()
-        saveCurrentWhitePageEdits()
+    override fun onStop() {
+        safeSaveAll()
+        super.onStop()
+    }
 
+    override fun onDestroyView() {
         try {
             currentPage?.close()
         } catch (_: Exception) {
@@ -838,6 +928,7 @@ class PdfFragment : Fragment() {
         } catch (_: Exception) {
         }
 
+        pdfOpened = false
         _binding = null
         super.onDestroyView()
     }
